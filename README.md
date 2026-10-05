@@ -120,7 +120,14 @@ noted):
   further defects appear on 7.1.9 that do not on 7.2.2: the TAS2783 calibration
   blobs are requested without the `0x` filename prefix that `linux-firmware`
   ships them under, and the machine driver emits no `spk:` tag, so UCM never
-  includes the speaker. See `arch-7.1.9/README.md`.
+  includes the speaker. See `arch-7.1.9/README.md`. The same scripts build for
+  Omarchy's `linux-omarchy` kernel, which needs its own patches layered on
+  first.
+* `resume/` — a follow-on problem, not part of the upstream series: once the
+  speakers work, every resume from suspend freezes the machine for 10–13 s
+  while the kernel waits for the amplifiers. Two patches to
+  `snd-soc-tas2783-sdw` and the measurements behind them. Built, not yet
+  resume-tested. See `resume/README.md`.
 
 ## Status
 

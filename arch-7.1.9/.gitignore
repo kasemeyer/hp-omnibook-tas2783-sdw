@@ -1,4 +1,6 @@
 build-sdw-intel/*
 build-sdca/*
+build-tas2783/*
 !build-sdw-intel/Makefile
 !build-sdca/Makefile
+!build-tas2783/Makefile

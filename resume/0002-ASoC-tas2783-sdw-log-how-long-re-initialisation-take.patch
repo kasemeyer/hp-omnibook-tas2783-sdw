@@ -1,0 +1,88 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kasey Prichard <kasey.prichard@gmail.com>
+Date: Sun, 04 Oct 2026 23:50:52 -0500
+Subject: [PATCH 2/2] ASoC: tas2783-sdw: log how long re-initialisation takes
+ after system resume
+
+Local diagnostic, not for upstream.
+
+With system resume no longer waiting for the amplifiers, nothing in the
+log says when they actually came back. Print one line per amplifier when
+tas_update_status() finishes re-initialising it after a system resume:
+
+  slave-tas2783 sdw:0:1:0102:0000:01:a: re-initialised <N> ms after system resume, ret=0
+
+That is the number the previous patch's commit message has to infer from
+where the timeouts landed: how long the reset, firmware download and
+init writes take per amplifier, and how far the second amplifier on a
+link trails the first. It is also the number that says whether skipping
+the firmware download for an amplifier that kept its firmware (the
+approach queued upstream for 7.3) would make the wait short enough to
+keep.
+
+Assisted-by: Claude:claude-fable-5-1
+---
+ sound/soc/codecs/tas2783-sdw.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -103,6 +103,9 @@ struct tas2783_prv {
+ 	bool fw_dl_success;
+ 	/* use fallback fw name */
+ 	bool fw_use_fallback;
++	/* when the bus reset the peripheral, to report how long it was away */
++	ktime_t reset_time;
++	bool reset_timing;
+ };
+ 
+ static const struct reg_default tas2783_reg_default[] = {
+@@ -1160,6 +1163,7 @@ static s32 tas2783_sdca_dev_resume(struc
+ static s32 tas2783_sdca_dev_system_resume(struct device *dev)
+ {
+ 	struct sdw_slave *slave = dev_to_sdw_dev(dev);
++	struct tas2783_prv *tas_dev = dev_get_drvdata(dev);
+ 
+ 	/*
+ 	 * The manager did not reset the bus, so the peripheral never left it
+@@ -1185,6 +1189,12 @@ static s32 tas2783_sdca_dev_system_resum
+ 	 */
+ 	slave->unattach_request = 0;
+ 
++	/* still on its way back: time it from here, see tas_update_status() */
++	if (!tas_dev->hw_init) {
++		tas_dev->reset_time = ktime_get();
++		tas_dev->reset_timing = true;
++	}
++
+ 	return 0;
+ }
+ 
+@@ -1296,6 +1306,7 @@ static s32 tas_update_status(struct sdw_
+ {
+ 	struct tas2783_prv *tas_dev = dev_get_drvdata(&slave->dev);
+ 	struct device *dev = &slave->dev;
++	s32 ret;
+ 
+ 	dev_dbg(dev, "Peripheral status = %s",
+ 		status == SDW_SLAVE_UNATTACHED ? "unattached" :
+@@ -1330,7 +1341,15 @@ static s32 tas_update_status(struct sdw_
+ 	regcache_drop_region(tas_dev->regmap, 0, UINT_MAX);
+ 
+ 	/* perform I/O transfers required for Slave initialization */
+-	return tas_io_init(&slave->dev, slave);
++	ret = tas_io_init(&slave->dev, slave);
++
++	if (tas_dev->reset_timing) {
++		tas_dev->reset_timing = false;
++		dev_info(dev, "re-initialised %lld ms after system resume, ret=%d\n",
++			 ktime_ms_delta(ktime_get(), tas_dev->reset_time), ret);
++	}
++
++	return ret;
+ }
+ 
+ /*
+-- 
+2.55.0
+

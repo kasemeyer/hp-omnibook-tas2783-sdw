@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Kasey Prichard <kasey.prichard@gmail.com>
+Date: Sun, 04 Oct 2026 23:50:52 -0500
+Subject: [PATCH 1/2] ASoC: tas2783-sdw: do not block system resume on
+ peripheral re-attach
+
+tas2783_sdca_dev_resume() serves both runtime and system resume, and
+starts by waiting up to TAS2783_PROBE_TIMEOUT (5 s) for the peripheral
+to be enumerated and initialised again. For system resume that wait runs
+in the PM core's device resume phase, before tasks are thawed, so the
+whole machine waits with it.
+
+On the HP OmniBook Ultra 14 (board 8EB4, Panther Lake, four TAS2783, two
+each on SoundWire links 1 and 2) the wait cannot be met. After the
+manager resets the bus, tas_update_status() resets each amplifier and
+downloads its 40 KiB firmware again, and sdw_handle_slave_status()
+initialises the peripherals on a link one after the other. The same two
+amplifiers are late every time: sdw:0:1:0102:0000:01:a on every resume,
+and sdw:0:2:0102:0000:01:9 on most. They are not ready when their
+callback gives up, and the timeouts run back to back. Kernel timestamps
+from one resume on 7.2.5, relative to "ACPI: EC: interrupt unblocked":
+
+   +0.16 s  nvme nvme0: 16/0/0 default/read/poll queues
+   +5.87 s  slave-tas2783 sdw:0:1:0102:0000:01:a: Initialization not complete
+            ... PM: failed to resume: error -110
+  +11.51 s  slave-tas2783 sdw:0:2:0102:0000:01:9: Initialization not complete
+            ... PM: failed to resume: error -110
+  +12.13 s  Restarting tasks: Done
+
+Six resumes over three boots (7.1.9 and 7.2.5) stalled for 10 to 13 s
+this way; four resumes of the same 7.2.5 kernel without the amplifiers
+working took a second or less. The lock screen is on the panel the whole
+time and takes no input. The late amplifiers do attach afterwards, so
+the wait bought nothing: the callback had already failed.
+
+Give system resume its own callback. When the manager reset the bus
+(slave->unattach_request), return without waiting: tas_update_status()
+already does everything the peripheral needs when it attaches. It takes
+the regmap out of cache-only mode, drops the stale cache, resets the
+device, downloads the firmware and writes the init sequence. When the
+bus was not reset the peripheral is still attached, the wait completes
+immediately, and behaviour is unchanged. Runtime resume is unchanged
+too.
+
+The amplifiers become usable at the same moment as before. What changes
+is that user space is running while they finish, so a stream opened in
+that window can fail ("error playback without fw download") where
+before the whole system waited.
+
+Link: https://github.com/omacom/omarchy/issues/14172
+Link: https://github.com/thesofproject/linux/issues/5732
+Assisted-by: Claude:claude-fable-5-1
+---
+Not signed off: build-tested against 7.2.5-3-omarchy only when written.
+Add your Signed-off-by once it has been through real suspend/resume
+cycles on the machine.
+
+Cut against linux-omarchy 7.2.5-3, whose driver matches sound for-next
+here. It depends on b627da430357 ("ASoC: tas2783-sdw: drop stale
+regcache on uninitialized re-attach"), which linux-omarchy carries and
+plain v7.2.5 does not: without it the cache this callback no longer
+syncs is left stale instead of dropped.
+
+ sound/soc/codecs/tas2783-sdw.c | 34 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 33 insertions(+), 1 deletion(-)
+
+--- a/sound/soc/codecs/tas2783-sdw.c
++++ b/sound/soc/codecs/tas2783-sdw.c
+@@ -1157,8 +1157,40 @@ static s32 tas2783_sdca_dev_resume(struc
+ 	return 0;
+ }
+ 
++static s32 tas2783_sdca_dev_system_resume(struct device *dev)
++{
++	struct sdw_slave *slave = dev_to_sdw_dev(dev);
++
++	/*
++	 * The manager did not reset the bus, so the peripheral never left it
++	 * and the wait in the common path completes at once.
++	 */
++	if (!slave->unattach_request)
++		return tas2783_sdca_dev_resume(dev);
++
++	/*
++	 * The manager reset the bus on its way back up and the peripheral is
++	 * re-enumerating. Once it attaches, tas_update_status() takes the
++	 * regmap out of cache-only mode, resets the device and downloads its
++	 * firmware again, which takes seconds per amplifier. The bus handles
++	 * the peripherals on a link one after the other, so with two
++	 * amplifiers on a link the second one may still be waiting its turn
++	 * when TAS2783_PROBE_TIMEOUT expires. Waiting for it here holds up
++	 * the whole system resume, once per late amplifier, only to fail the
++	 * callback with -ETIMEDOUT.
++	 *
++	 * Nothing after the wait is needed in this case either, since
++	 * tas_update_status() drops the cache that would be synced. Let the
++	 * amplifiers come back in the background instead.
++	 */
++	slave->unattach_request = 0;
++
++	return 0;
++}
++
+ static const struct dev_pm_ops tas2783_sdca_pm = {
+-	SYSTEM_SLEEP_PM_OPS(tas2783_sdca_dev_system_suspend, tas2783_sdca_dev_resume)
++	SYSTEM_SLEEP_PM_OPS(tas2783_sdca_dev_system_suspend,
++			    tas2783_sdca_dev_system_resume)
+ 	RUNTIME_PM_OPS(tas2783_sdca_dev_suspend, tas2783_sdca_dev_resume, NULL)
+ };
+ 
+-- 
+2.55.0
+

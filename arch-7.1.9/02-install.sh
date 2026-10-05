@@ -9,6 +9,8 @@
 #   2. patched soundwire-intel.ko (ACTMCTL DOAIS/DOAISE2 DMI quirk, patch 0002)
 #   3. patched snd-soc-sdca.ko (SmartAmp function-type fallback, patch 0001)
 #   4. TAS2783 UCM profile so PipeWire offers HiFi Speaker instead of pro-audio
+#   5. patched snd-soc-tas2783-sdw.ko (system resume no longer waits for the
+#      amplifiers, ../resume/) -- only when fetch-src.sh + make built it
 #
 # Rollback: sudo arch-7.1.9/99-uninstall.sh
 set -euo pipefail
@@ -43,6 +45,20 @@ echo "   soundwire_intel -> $(modinfo -n soundwire_intel)"
 echo "   snd_soc_sdca    -> $(modinfo -n snd_soc_sdca)"
 modinfo -n soundwire_intel | grep -q '/updates/' || { echo "ERROR: override not taking precedence"; exit 1; }
 modinfo -n snd_soc_sdca    | grep -q '/updates/' || { echo "ERROR: override not taking precedence"; exit 1; }
+
+echo "== 5. resume override =="
+TAS="$SRC/build-tas2783/snd-soc-tas2783-sdw.ko"
+if [ -f "$TAS" ]; then
+  install -m644 "$TAS" "$DST/snd-soc-tas2783-sdw.ko"
+  depmod -a "$KVER"
+  echo "   snd_soc_tas2783_sdw -> $(modinfo -n snd_soc_tas2783_sdw)"
+  modinfo -n snd_soc_tas2783_sdw | grep -q '/updates/' || { echo "ERROR: override not taking precedence"; exit 1; }
+else
+  # a stale override from another build must not outlive the modules it matched
+  rm -fv "$DST/snd-soc-tas2783-sdw.ko"
+  depmod -a "$KVER"
+  echo "   not built for this kernel; stock snd_soc_tas2783_sdw stays"
+fi
 
 echo "== 4. UCM profile =="
 install -Dm644 "$REPO/ucm/sof-soundwire/tas2783.conf" "$U/sof-soundwire/tas2783.conf"

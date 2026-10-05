@@ -5,6 +5,7 @@ echo
 echo "=== 1. overrides loaded from /updates/? ==="
 printf '  soundwire_intel : %s\n' "$(modinfo -n soundwire_intel)"
 printf '  snd_soc_sdca    : %s\n' "$(modinfo -n snd_soc_sdca)"
+printf '  snd_soc_tas2783_sdw : %s  (resume override; stock path if not built)\n' "$(modinfo -n snd_soc_tas2783_sdw)"
 echo
 echo "=== 2. did the ACTMCTL quirk fire? (expect 2 lines, links 1 and 2) ==="
 journalctl -k -b --no-pager | grep -i 'ACTMCTL quirk' || echo "  !! quirk did NOT fire"
@@ -34,3 +35,11 @@ pactl list short sinks 2>/dev/null
 echo
 echo "=== 10. card profile ==="
 pactl list cards 2>/dev/null | grep -A2 -iE 'Active Profile' | head -10
+echo
+echo "=== 11. resume (run after at least one suspend/resume this boot) ==="
+echo "  with the override: one 're-initialised N ms' line per amp and resume,"
+echo "  no 'failed to resume', and a kernel resume time of about a second"
+journalctl -k -b --no-pager -o cat | grep -E 'tas2783.*(failed to resume|re-initialised)' | tail -8
+journalctl -k -b --no-pager -o json \
+  | jq -r 'select(.MESSAGE|type=="string") | select(.MESSAGE|test("EC: interrupt unblocked|Restarting tasks: Done")) | "\((._SOURCE_MONOTONIC_TIMESTAMP|tonumber)/1e6) \(.MESSAGE)"' 2>/dev/null \
+  | awk '/EC: interrupt unblocked/ {t = $1; next} t > 10 {printf "  kernel resume took %.1f s\n", $1 - t; t = 0}' | tail -4

@@ -90,17 +90,42 @@ Since stock `alsa-ucm-conf` ships no `tas2783.conf` regardless, the UCM files in
 * The `/etc/modprobe.d/` debug and knob confs are **not** installed —
   experiments 0027/0028 established the DMI quirk alone is the whole fix.
 
+## Omarchy's kernel (linux-omarchy)
+
+The directory is named for where it started; the same scripts build for
+`linux-omarchy` (verified on 7.2.5-3-omarchy), with one difference that matters.
+
+**linux-omarchy is not the plain stable tag.** Its PKGBUILD applies about 90
+patches, and `0510-sound-updates.patch` alone rewrites enough of SDCA that plain
+v7.2.5 `sdca_functions.c` does not compile against `linux-omarchy-headers`
+(`sdca_parse_function()` has a different signature). On an `-omarchy` kernel
+`fetch-src.sh` therefore finds the `omacom/omarchy-pkgs` commit that built the
+running `pkgver-pkgrel`, downloads that commit's patches, and applies whatever
+they do to the files being built before applying ours. It needs `jq` and
+network access to GitHub. Check: the sources it produces for `soundwire-intel`
+and `snd-soc-sdca` are byte-identical to the ones the installed modules were
+built from, and the rebuilt modules have the same `srcversion`.
+
+Kernel headers there come from `linux-omarchy-headers`, not `linux-headers`
+(`01-prereqs.sh` installs the latter).
+
+On this kernel a third module is built as well: `snd-soc-tas2783-sdw` with the
+`../resume/` series, which stops every resume from suspend freezing for 10–13 s
+while the kernel waits for the amplifiers. It is independent of the speaker fix
+and is skipped on kernels it does not apply to (including 7.1.9). See
+`../resume/README.md` — built, not yet resume-tested.
+
 ## Usage
 
 ```sh
 sudo ./01-prereqs.sh          # linux-headers matching the running kernel
-./fetch-src.sh                # kernel sources + both patches
-make                          # build both modules (GCC, no LLVM=1)
+./fetch-src.sh                # kernel sources (+ distro patches) + our patches
+make                          # build the modules (GCC, no LLVM=1)
 sudo ./02-install.sh          # fw symlinks + module overrides + UCM
 sudo reboot
 sudo ./04-fix-ucm-spk-tag.sh  # UCM speaker-codec compat block
 systemctl --user restart wireplumber pipewire pipewire-pulse
-./03-verify.sh                # ten-point check
+./03-verify.sh                # ten-point check, plus resume timing
 ```
 
 Rollback: `sudo ./99-uninstall.sh` (also reverts the `04` change), then reboot.
