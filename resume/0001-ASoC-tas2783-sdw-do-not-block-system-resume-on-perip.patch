@@ -51,9 +51,11 @@ Link: https://github.com/omacom/omarchy/issues/14172
 Link: https://github.com/thesofproject/linux/issues/5732
 Assisted-by: Claude:claude-fable-5-1
 ---
-Not signed off: build-tested against 7.2.5-3-omarchy only when written.
-Add your Signed-off-by once it has been through real suspend/resume
-cycles on the machine.
+Not signed off. Tested on 7.2.5-3-omarchy over one short suspend/resume
+cycle: kernel resume 0.6 s (was 10 to 13 s), the four amplifiers
+re-initialised 2.5, 2.5, 5.1 and 5.1 s after their resume callback, and
+playback worked afterwards. Add your Signed-off-by once it has been
+through more cycles, including a long sleep.
 
 Cut against linux-omarchy 7.2.5-3, whose driver matches sound for-next
 here. It depends on b627da430357 ("ASoC: tas2783-sdw: drop stale

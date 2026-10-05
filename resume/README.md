@@ -5,9 +5,23 @@ fix works: with all four amplifiers alive, every resume from s2idle holds the
 whole machine in the kernel for 10–13 s. The lock screen is drawn and takes no
 input until it is over.
 
-**Status: built and compile-checked against linux-omarchy 7.2.5-3, not yet
-run through a suspend/resume cycle.** The numbers below are from the stock
-driver; nothing here has been measured with the patch loaded.
+**Status: installed on linux-omarchy 7.2.5-3 and measured over one short
+suspend/resume cycle (2026-10-05).** Kernel resume time went from 10–13 s to
+0.6 s; the lock screen took the password at once and music played right after
+unlocking. Not yet tried: a sleep of hours, music playing as the lid closes,
+closing the lid again within a few seconds of opening it, and one tone per
+speaker after a resume.
+
+```
+ +0.00 s  ACPI: EC: interrupt unblocked
+ +0.61 s  Restarting tasks: Done
+ +3.00 s  slave-tas2783 sdw:0:1:0102:0000:01:d: re-initialised 2512 ms after system resume, ret=0
+ +3.00 s  slave-tas2783 sdw:0:2:0102:0000:01:c: re-initialised 2510 ms after system resume, ret=0
+ +5.60 s  slave-tas2783 sdw:0:2:0102:0000:01:9: re-initialised 5118 ms after system resume, ret=0
+ +5.61 s  slave-tas2783 sdw:0:1:0102:0000:01:a: re-initialised 5122 ms after system resume, ret=0
+```
+
+The rest of this file up to "The patches" describes the stock driver.
 
 ## What happens
 
@@ -49,9 +63,14 @@ Why the wait cannot be met here — partly measured, partly inferred:
   `sdw_handle_slave_status()` initialises the peripherals on a link one after
   the other, completing each one's `initialization_complete` only when its
   driver callback returns.
-* Inferred: the timings fit roughly 5.5 s per amplifier, which puts the second
-  amplifier on each link at about 11 s — past a 5 s limit no matter what. Patch
-  0002 exists to replace this inference with a logged number.
+* Measured with patch 0002, resume no longer blocked: about 2.5 s per
+  amplifier, the two links in parallel, so the first amplifier on each link is
+  ready 2.5 s after its resume callback and the second 5.1 s after — some
+  120 ms past the 5 s limit.
+* Not explained: with the stock driver `:9` was still not ready 11.5 s in,
+  though unblocked it needs 5.1 s. The first guess here, 5.5 s per amplifier,
+  was wrong. Whatever the cause, initialisation ran slower while system resume
+  sat waiting for it than it does once resume is allowed to finish.
 
 So `:a` and `:9` being the same two amplifiers that would not attach before the
 ACTMCTL quirk is probably coincidence: they are simply second in line.
@@ -79,20 +98,21 @@ when it is missing.
 
 ## What to expect, and what to test
 
-The amplifiers are ready at the same moment as before, about 11 s after wake.
-The difference is that the desktop is usable while they finish.
+All four amplifiers are ready about 5 s after wake, and the desktop is usable
+while they finish.
 
-1. Wake time: `arch-7.1.9/03-verify.sh` section 11 should show a kernel resume
-   of about a second, four `re-initialised` lines per resume and no
+1. Wake time — done, see Status. `arch-7.1.9/03-verify.sh` section 11 shows a
+   kernel resume under a second, four `re-initialised` lines per resume and no
    `failed to resume`.
 2. All four speakers after a resume (one tone per amp, as in the original fix).
-3. Sound started in the first ~10 s after wake. A stream opened before an
+3. Sound started in the first ~5 s after wake. A stream opened before an
    amplifier has its firmware gets `-EINVAL` ("error playback without fw
    download") from `hw_params`; whether PipeWire retries cleanly or needs a
-   second attempt is the open question.
+   second attempt is the open question. Music started right after a normal
+   unlock played, with nothing logged.
 4. Music playing when the lid closes: it should pick up again once the
    amplifiers are back, without restarting PipeWire.
-5. Closing the lid again within ~10 s of opening it, while the amplifiers are
+5. Closing the lid again within ~5 s of opening it, while the amplifiers are
    still downloading firmware.
 
 If 3 or 4 misbehave, the next step is a bounded wait for the amplifier in
